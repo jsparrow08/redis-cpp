@@ -10,6 +10,7 @@
 #include <vector>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include "resp.hpp"
 
 int set_nonblocking(int fd)
 {
@@ -23,13 +24,41 @@ int handle_client(int client_fd){
   int bytes = recv(client_fd,buffer,sizeof(buffer)-1,0);
   if(bytes >0){
     // TODO: parse message
+    std::string input(buffer, bytes);
+    struct resp_value  res= resp_parser::decode(input)->first;
+    if( res.type == RespType::ARRAY){
+      auto arr= std::get<std::vector<resp_value>>(res.data);
+      if(arr.size() == 1){
+        if(arr[0].type == RespType::SIMPLE_STRING ){
+          if(std::get<std::string>(arr[0].data) == "PING"){
+            std::string response = resp_parser::encode(resp_value::make_string("PONG"));
+            send(client_fd, response.c_str(), response.length(), 0);
+            return 0;
+          }
+        }
+
+      }
+      else if(arr.size() ==2 ){
+        if(arr[0].type == RespType::SIMPLE_STRING && std::get<std::string>(arr[0].data) == "ECHO"){
+          if(arr.size() > 1 && arr[1].type == RespType::SIMPLE_STRING){
+            std::string echo_str = std::get<std::string>(arr[1].data);
+            resp_value bulk_str = resp_value::make_bulk_string(echo_str);
+            std::string response = resp_parser::encode(bulk_str);
+            send(client_fd, response.c_str(), response.length(), 0);
+          }
+        }
+      }
+      else{
+        std::cout << "Closing client FD " << client_fd << "\n";
+        return -1;
+      }
+    }
     
-    const char* response = "+PONG\r\n";
-    send(client_fd, response, strlen(response), 0);
+
     return 0;
   }
   else {
-    std::cout << "Closing FD " << client_fd << "\n";
+    std::cout << "Closing client FD " << client_fd << "\n";
     return -1;
   }
 
