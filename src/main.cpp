@@ -5,8 +5,38 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <fcntl.h>
+#include <sys/poll.h>
+#include <vector>
 #include <arpa/inet.h>
 #include <netdb.h>
+
+int set_nonblocking(int fd)
+{
+  int flags = fcntl(fd, F_GETFL, 0);
+  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+
+int handle_client(int client_fd){
+  char buffer[1024];
+  int bytes = recv(client_fd,buffer,sizeof(buffer)-1,0);
+  if(bytes >0){
+    // TODO: parse message
+    
+    const char* response = "+PONG\r\n";
+    send(client_fd, response, strlen(response), 0);
+    return 0;
+  }
+  else {
+    std::cout << "Closing FD " << client_fd << "\n";
+    return -1;
+  }
+
+
+  
+  // std::cout << "Response send\n";
+}
 
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
@@ -42,26 +72,51 @@ int main(int argc, char **argv) {
     std::cerr << "listen failed\n";
     return 1;
   }
-  
-  struct sockaddr_in client_addr;
-  int client_addr_len = sizeof(client_addr);
-  std::cout << "Waiting for a client to connect...\n";
 
-  // You can use print statements as follows for debugging, they'll be visible when running tests.
-  std::cout << "Logs from your program will appear here!\n";
+  set_nonblocking(server_fd);
+  std::vector<struct pollfd> fds;
+  fds.push_back({server_fd, POLLIN,0});
 
-  // Uncomment the code below to pass the first stage
-  // 
-  
-  int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
-  // std::cout << "Client connected\n";
-  char buffer[1024];
-  while(recv(client_fd,buffer,sizeof(buffer)-1,0)){
-  const char* response = "+PONG\r\n";
-  send(client_fd, response, strlen(response), 0);
-  // std::cout << "Response send\n";
+  while(true){
+    int activity = poll(fds.data(),fds.size(),-1);
+    if(activity<0){
+      std::cerr<<"poll failed\n";
+      return 1;
+    }
+    else if(activity == 0){
+      continue;
+    }
+    for(size_t i=0;i<fds.size();i++){
+      if(fds[i].revents & POLLIN){
+        if(fds[i].fd == server_fd){
+            while(true){
+              struct sockaddr_in client_addr;
+              int client_addr_len = sizeof(client_addr);
+              int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
+              if(client_fd < 0){
+                std::cerr << "Failed to accept client connection\n";
+                break;
+              }
+              set_nonblocking(client_fd);
+              fds.push_back({client_fd, POLLIN, 0});
+              std::cout << "Client connected : " << client_fd << "\n";
+          }
+        }
+        else{
+          int result = handle_client(fds[i].fd);
+          if(result == -1){
+            close(fds[i].fd);
+            fds.erase(fds.begin() + i);
+            i--;
+          }
+        }
+      }
+    }
+      
+
+
   }
-  // 
+  
   close(server_fd);
 
   return 0;
