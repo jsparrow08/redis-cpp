@@ -10,7 +10,13 @@
 #include <vector>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <unordered_map>
 #include "resp.hpp"
+#include "rdstore.hpp"
+
+
+
+static RDStore rd_store;
 
 int set_nonblocking(int fd)
 {
@@ -28,30 +34,43 @@ int handle_client(int client_fd){
     struct resp_value  res= resp_parser::decode(input)->first;
     if( res.type == RespType::ARRAY){
       auto arr= std::get<std::vector<resp_value>>(res.data);
-      if(arr.size() == 1){
-        if(arr[0].type == RespType::SIMPLE_STRING ){
-          if(std::get<std::string>(arr[0].data) == "PING"){
-            std::string response = resp_parser::encode(resp_value::make_string("PONG"));
-            send(client_fd, response.c_str(), response.length(), 0);
-            return 0;
-          }
-        }
+      if(arr[0].type != RespType::SIMPLE_STRING ){ return -1;}
+      std::string response;
+
+      std::string cmd=std::get<std::string>(arr[0].data);
+      
+      
+      if(cmd == "PING"){
+        response = resp_parser::encode(resp_value::make_string("PONG"));
+      }
+      else if(cmd == "ECHO"){
+        std::string echo_str = std::get<std::string>(arr[1].data);
+        response = resp_parser::encode(resp_value::make_bulk_string(echo_str));
+      }
+      else if(cmd == "SET"){
+        if(arr.size() < 3) return -1;
+        bool ret = rd_store.set(std::get<std::string>(arr[1].data),std::get<std::string>(arr[2].data));
+        if(ret)
+          response = resp_parser::encode(resp_value::make_string("OK"));
+        else 
+          response = resp_parser::encode(resp_value::make_null());
 
       }
-      else if(arr.size() ==2 ){
-        if(arr[0].type == RespType::SIMPLE_STRING && std::get<std::string>(arr[0].data) == "ECHO"){
-          if(arr.size() > 1 && arr[1].type == RespType::SIMPLE_STRING){
-            std::string echo_str = std::get<std::string>(arr[1].data);
-            resp_value bulk_str = resp_value::make_bulk_string(echo_str);
-            std::string response = resp_parser::encode(bulk_str);
-            send(client_fd, response.c_str(), response.length(), 0);
-          }
-        }
+      else if(cmd== "GET"){
+        if(arr.size()<2) return -1;
+        auto val = rd_store.get(std::get<std::string>(arr[1].data));
+        if(!val.has_value())
+          response = resp_parser::encode(resp_value::make_null());
+        else 
+          response = resp_parser::encode(resp_value::make_bulk_string(*val));
+
       }
       else{
         std::cout << "Closing client FD " << client_fd << "\n";
         return -1;
       }
+      send(client_fd, response.c_str(), response.length(), 0);
+
     }
     
 
