@@ -24,6 +24,20 @@ int set_nonblocking(int fd)
   return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+std::optional<set_param> get_set_params(std::vector<resp_value> &arr){
+  struct set_param param;
+  if(arr.size()<5){
+    return std::nullopt;
+  }
+  if(std::get<std::string>(arr[3].data) == "EX"){
+    param = {(long long)(std::stoi(std::get<std::string>(arr[4].data)) ),SetFlag::EX};
+  }
+  if(std::get<std::string>(arr[3].data) == "PX"){
+    param = {(long long)(std::stoi(std::get<std::string>(arr[4].data))),SetFlag::PX};
+  }
+  return param;
+}
+
 
 int handle_client(int client_fd){
   char buffer[1024];
@@ -36,9 +50,7 @@ int handle_client(int client_fd){
       auto arr= std::get<std::vector<resp_value>>(res.data);
       if(arr[0].type != RespType::SIMPLE_STRING ){ return -1;}
       std::string response;
-
       std::string cmd=std::get<std::string>(arr[0].data);
-      
       
       if(cmd == "PING"){
         response = resp_parser::encode(resp_value::make_string("PONG"));
@@ -49,7 +61,19 @@ int handle_client(int client_fd){
       }
       else if(cmd == "SET"){
         if(arr.size() < 3) return -1;
-        bool ret = rd_store.set(std::get<std::string>(arr[1].data),std::get<std::string>(arr[2].data));
+        auto st_param_opt = get_set_params(arr);
+        bool ret ;
+        if(st_param_opt.has_value()) {
+          ret = rd_store.set(std::get<std::string>(arr[1].data), 
+                                  std::get<std::string>(arr[2].data), 
+                                  &st_param_opt.value());
+        }
+        else {
+          ret = rd_store.set(std::get<std::string>(arr[1].data), 
+                                  std::get<std::string>(arr[2].data), nullptr);
+        }
+
+        // bool ret = rd_store.set(std::get<std::string>(arr[1].data),std::get<std::string>(arr[2].data),*st_param);
         if(ret)
           response = resp_parser::encode(resp_value::make_string("OK"));
         else 
