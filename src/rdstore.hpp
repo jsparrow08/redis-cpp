@@ -6,6 +6,7 @@
 #include <variant>
 #include <optional>
 #include <chrono>
+#include "resp.hpp"
 
 
 
@@ -42,6 +43,20 @@ inline long long get_current_time_ms() {
       .count();
 }
 
+inline std::optional<set_param> get_set_params(std::vector<resp_value> &arr){
+  struct set_param param;
+  if(arr.size()<5){
+    return std::nullopt;
+  }
+  if(std::get<std::string>(arr[3].data) == "EX"){
+    param = {(long long)(std::stoi(std::get<std::string>(arr[4].data)) ),SetFlag::EX};
+  }
+  if(std::get<std::string>(arr[3].data) == "PX"){
+    param = {(long long)(std::stoi(std::get<std::string>(arr[4].data))),SetFlag::PX};
+  }
+  return param;
+}
+
 
 class RDStore {
     public:
@@ -49,9 +64,10 @@ class RDStore {
         RDStore() = default;
 
         // public apis//
-        bool set(std::string &key, std::string &val, struct set_param *param);
-
-        std::optional<std::string> get(std::string &key);
+        bool set(std::string &key, std::string &val, struct set_param *param); // Set entry
+        std::optional<std::string> get(std::string &key); // remove entry 
+        
+        // std::optional<std::string> HandleCommand(int bytes , char buffer[]);
 
     private:
 

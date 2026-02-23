@@ -33,4 +33,3 @@ std::optional<std::string> RDStore::get(std::string &key){
     }
     return std::nullopt;
 }
-
