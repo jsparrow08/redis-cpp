@@ -13,9 +13,11 @@ RedisServer::RedisServer(int port ){
     config.port = port;
 }
 
-RedisServer::RedisServer(int port , const std::string &role){
+RedisServer::RedisServer(int port , struct ReplicationConfig rep_config){
     config.port = port;
-    config.role = role;
+    config.replication_config = rep_config;
+    if(rep_config.is_replica) config.role = "slave";
+    else config.role = "master";
 }
 
 void RedisServer::run(){

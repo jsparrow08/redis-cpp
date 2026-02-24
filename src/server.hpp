@@ -34,6 +34,12 @@ inline bool operator&(ServerInfo a, ServerInfo b) {
     return (static_cast<unsigned int>(a) & static_cast<unsigned int>(b)) != 0;
 }
 
+struct ReplicationConfig {
+    bool is_replica = false;
+    std::string master_host="";
+    int master_port = 0;
+};
+
 struct ServerConfig {
     int port = 6379;
     // version
@@ -44,15 +50,18 @@ struct ServerConfig {
     int used_memory = 0;
 
     //Replication
+    
+
     std::string role = "master"; // "master" or "slave"
-    std::string master_replid = "";
-    long long master_repl_offset = 0;
+    struct ReplicationConfig replication_config;
+    // std::string master_replid = "";
+    // long long master_repl_offset = 0;
 };
 
 class RedisServer{
     public:
         RedisServer(int port);
-        RedisServer(int port , const std::string &role);
+        RedisServer(int port , struct ReplicationConfig rep_config);
         void run();
         void stop();
     private:
