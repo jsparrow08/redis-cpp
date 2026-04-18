@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include "config/config.hpp"
 #include "config/replication_config.hpp"
-#include "server.hpp"
+#include "server/server.hpp"
 
 
 

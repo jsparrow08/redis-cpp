@@ -14,9 +14,9 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
-#include "config/config.hpp"
-#include "rdstore.hpp"
-#include "resp.hpp"
+#include "../config/config.hpp"
+#include "../command/command_handler.hpp"
+#include "../replication/replication_manager.hpp"
 
 class RedisServer{
     public:
@@ -26,13 +26,13 @@ class RedisServer{
         void stop();
     private:
         Config config;
-        RDStore rd_store;
+        std::unique_ptr<CommandHandler> command_handler;
+        std::unique_ptr<ReplicationManager> replication_manager;
         int server_fd;
 
         int setup_server_socket();
         void handle_new_connection(std::vector<struct pollfd> &fds);
-        int handle_client_data(int client_fd);
-        std::optional<std::string> HandleCommand(int bytes , char buffer[]);
+        int handle_client_request(int client_fd);
         std::string get_info(ServerInfo flag);
 
 };

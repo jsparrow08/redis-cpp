@@ -19,6 +19,7 @@ graph TB
         SERVER["RedisServer<br/>Single Thread"]
         PARSER["RESP Parser<br/>Synchronous"]
         STORE["RDStore<br/>In-Memory"]
+        REPL_MGR["ReplicationManager<br/>Handshake & Sync"]
     end
 
     subgraph "Data Layer"
@@ -35,10 +36,14 @@ graph TB
     SERVER -->|Parse Request| PARSER
     PARSER -->|Command + Args| SERVER
     SERVER -->|Execute| STORE
+    SERVER -->|Init Replica| REPL_MGR
 
     STORE -->|Read/Write| KV_MAP
     STORE -->|Read/Write| EXPIRY_MAP
     STORE -->|Protect| MUTEX
+
+    REPL_MGR -->|Connect to Master| SOCKET
+    REPL_MGR -->|Send/Recv Handshake| POLL
 
     SERVER -->|Response| C1
     SERVER -->|Response| C2
@@ -54,6 +59,7 @@ sequenceDiagram
     participant RedisServer
     participant RESP_Parser
     participant RDStore
+    participant ReplicationManager
     participant Mutex
 
     Client->>Poll: Send RESP Request
@@ -69,6 +75,13 @@ sequenceDiagram
     RDStore->>RedisServer: Return result
     RedisServer->>RedisServer: Encode response
     RedisServer->>Client: send() response
+
+    Note over RedisServer,ReplicationManager: Replica Mode Only
+    RedisServer->>ReplicationManager: start_handshake()
+    ReplicationManager->>ReplicationManager: connectToMaster()
+    ReplicationManager->>ReplicationManager: sendPing()
+    ReplicationManager->>ReplicationManager: receivePong()
+    ReplicationManager->>RedisServer: Handshake result
 ```
 
 ## Data Type Architecture
@@ -110,16 +123,19 @@ graph TB
         POLL_LOOP["Poll Loop<br/>while(true)"]
         ACCEPT_LOOP["Accept Loop<br/>while(true)"]
         PROCESS_LOOP["Process Clients<br/>Sequential"]
+        REPL_INIT["Replication Init<br/>Before Loop"]
     end
 
     subgraph "Operations"
-        RECV["recv() calls<br/>Blocking per client"]
+        RECV["recv() calls<br/>Non-blocking"]
         PARSE["Parse RESP<br/>Synchronous"]
         EXECUTE["Execute Commands<br/>Sequential"]
-        SEND["send() calls<br/>Blocking per client"]
+        SEND["send() calls<br/>Non-blocking"]
+        HANDSHAKE["Handshake Ops<br/>Blocking"]
     end
 
-    MAIN -->|Runs| POLL_LOOP
+    MAIN -->|Runs| REPL_INIT
+    REPL_INIT -->|Then| POLL_LOOP
     POLL_LOOP -->|Handles| ACCEPT_LOOP
     POLL_LOOP -->|Handles| PROCESS_LOOP
 
@@ -127,6 +143,7 @@ graph TB
     PROCESS_LOOP -->|Calls| PARSE
     PROCESS_LOOP -->|Calls| EXECUTE
     PROCESS_LOOP -->|Calls| SEND
+    REPL_INIT -->|Calls| HANDSHAKE
 ```
 
 ## Memory Layout
@@ -255,7 +272,9 @@ graph TD
     STORE_ERROR["Storage operation fails"]
     ENCODE_ERROR["encode() fails"]
     SEND_ERROR["send() fails"]
+    REPL_ERROR["Replication handshake fails"]
     CLOSE_CLIENT["Close connection"]
+    SHUTDOWN["Server shutdown"]
 
     START -->|Success| RECV_ERROR
     RECV_ERROR -->|Error| CLOSE_CLIENT
@@ -272,6 +291,8 @@ graph TD
     ENCODE_ERROR -->|Success| SEND_ERROR
     SEND_ERROR -->|Error| CLOSE_CLIENT
     SEND_ERROR -->|Success| START
+
+    REPL_ERROR -->|On startup| SHUTDOWN
 ```
 
 ## Configuration Architecture
@@ -301,6 +322,42 @@ graph LR
     SERVER_CONFIG -->|Tracks| USED_MEMORY
 ```
 
+## Replication Architecture
+
+```mermaid
+graph TB
+    subgraph "Master Server"
+        MASTER_SERVER["RedisServer<br/>Role: master"]
+        MASTER_STORE["RDStore<br/>Master data"]
+        MASTER_POLL["Poll Loop<br/>Accepts replicas"]
+    end
+
+    subgraph "Replica Server"
+        REPLICA_SERVER["RedisServer<br/>Role: slave"]
+        REPLICA_MGR["ReplicationManager"]
+        REPLICA_STORE["RDStore<br/>Replica data"]
+    end
+
+    subgraph "Handshake Protocol"
+        CONNECT["TCP Connect<br/>to Master"]
+        SEND_PING["Send PING<br/>RESP format"]
+        RECV_PONG["Receive PONG<br/>Validate response"]
+        SUCCESS["Handshake Success<br/>Keep connection"]
+    end
+
+    REPLICA_SERVER -->|Init| REPLICA_MGR
+    REPLICA_MGR -->|1| CONNECT
+    CONNECT -->|2| SEND_PING
+    SEND_PING -->|3| RECV_PONG
+    RECV_PONG -->|4| SUCCESS
+
+    MASTER_POLL -->|Accept| MASTER_SERVER
+    MASTER_SERVER -->|Handle PING| MASTER_STORE
+    MASTER_STORE -->|Return PONG| MASTER_SERVER
+    MASTER_SERVER -->|Send PONG| REPLICA_MGR
+```
+
+<!-- 
 ## Limitations Overview
 
 ```mermaid
@@ -328,4 +385,4 @@ graph TD
         NO_RATE_LIMIT["No rate limiting"]
         BUFFER_OVERFLOW["Potential buffer overflow"]
     end
-```
+``` -->

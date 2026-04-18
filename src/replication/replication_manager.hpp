@@ -1,0 +1,27 @@
+#pragma once
+
+#include <memory>
+#include <string>
+#include "../config/replication_config.hpp"
+
+class ReplicationManager {
+public:
+    explicit ReplicationManager(const ReplicationConfig& replication_config);
+    ~ReplicationManager();
+
+    // Start the replica handshake process.
+    bool start_handshake();
+
+    
+
+private:
+    bool connectToMaster();
+    bool send_to_master(std::string str);
+    // Send the initial PING to the master.
+    bool sendPing();
+    // Read and validate the master's PONG reply.
+    bool receivePong();
+
+    ReplicationConfig replication_config_;
+    int master_fd_ = -1;
+};
