@@ -9,20 +9,15 @@ int set_nonblocking(int fd)
 
 
 // RedisServer///
-RedisServer::RedisServer(int port ){
-    config.port = port;
-}
+RedisServer::RedisServer(int port )
+    : config(port) {}
 
-RedisServer::RedisServer(int port , struct ReplicationConfig rep_config){
-    config.port = port;
-    config.replication_config = rep_config;
-    if(rep_config.is_replica) config.role = "slave";
-    else config.role = "master";
-}
+RedisServer::RedisServer(int port, const ReplicationConfig& rep_config)
+    : config(port, rep_config) {}
 
 void RedisServer::run(){
     if(setup_server_socket()) return;
-    std::cout << "Server started on port " << config.port << " as " << config.role << std::endl;
+    std::cout << "Server started on port " << config.getPort() << " as " << config.getRole() << std::endl;
     std::vector<struct pollfd> fds;
     fds.push_back({server_fd, POLLIN,0});
 
@@ -39,7 +34,7 @@ void RedisServer::run(){
                     int ret = handle_client_data(fds[i].fd);
                     if(ret == -1){
                         close(fds[i].fd);
-                        config.client_connected=std::max(0,config.client_connected-1);
+                        config.decrementConnectedClients();
                         fds.erase(fds.begin() + i);
                         i--;
                     }
@@ -66,7 +61,7 @@ void RedisServer::handle_new_connection(std::vector<struct pollfd> &fds){
         }
         set_nonblocking(client_fd);
         fds.push_back({client_fd, POLLIN, 0});
-        config.client_connected++;
+        config.incrementConnectedClients();
         std::cout << "Client connected : " << client_fd << "\n";
     }
 }
@@ -166,20 +161,22 @@ std::string RedisServer::get_info(ServerInfo flag){
     
     std::string info_body;
     if(flag & ServerInfo::SERVER){
-        // info_body += "# Server\r\n";
-        info_body = info_body + "redis_version::" + std::to_string(config.version)+ "\r\n";
+
+        info_body = info_body + "redis_version::" + std::to_string(config.getVersion())+ "\r\n";
     }
     if(flag & ServerInfo::CLIENTS){
-        // info_body += "# Clients \r\n";
-        info_body = info_body + "connected_clients:" + std::to_string(config.client_connected)+ "\r\n";
+
+        info_body = info_body + "connected_clients:" + std::to_string(config.getClientConnected())+ "\r\n";
     }
     if(flag & ServerInfo::MEMORY){
-        // info_body += "# Memory \r\n";
-        info_body = info_body + "used_memory:" + std::to_string(config.used_memory)+ "\r\n";
+
+        info_body = info_body + "used_memory:" + std::to_string(config.getUsedMemory())+ "\r\n";
     }
     if(flag & ServerInfo::REPLICATION){
-        // info_body += "# Replication \r\n";
-        info_body = info_body + "role:" + config.role + "\r\n";
+
+        // info_body = info_body + "role:" + config.getRole() + "\r\n";
+        info_body += config.getRepInfo();
+
     }
     
     // TODO: will add other info later on 
@@ -204,9 +201,9 @@ int RedisServer::setup_server_socket(){
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(config.port);
+    server_addr.sin_port = htons(config.getPort());
     if (bind(serverfd, (struct sockaddr *) &server_addr, sizeof(server_addr)) != 0) {
-        std::cerr << "Failed to bind to port "<<config.port<<"\n";
+        std::cerr << "Failed to bind to port "<<config.getPort()<<"\n";
         return 1;
     }
 

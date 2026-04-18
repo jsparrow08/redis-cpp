@@ -1044,4 +1044,8 @@ dkms.conf
 # Raspberry Pi Pico disassembler file
 *.dis
 
+##### Project-specific files  
+# Progress tracking for LLM context
+PROGRESS.md
+
 vcpkg_installed
