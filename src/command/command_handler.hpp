@@ -15,6 +15,7 @@ public:
 
 private:
     std::string getInfo(ServerInfo flag);
+    std::string getRdbFile(); 
 
     Config& config_;
     RDStore rd_store_;
