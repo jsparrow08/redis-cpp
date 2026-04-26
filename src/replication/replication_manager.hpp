@@ -7,7 +7,7 @@
 class ReplicationManager {
 public:
     explicit ReplicationManager(const ReplicationConfig& replication_config, int replica_port);
-    explicit ReplicationManager(const ReplicationConfig& replication_config);
+    // explicit ReplicationManager(const ReplicationConfig& replication_config);
     ~ReplicationManager();
 
     // Start the replica handshake process.
@@ -20,11 +20,14 @@ private:
     bool send_to_master(std::string str);
     // Send the initial PING to the master.
     bool sendPing();
+    bool sendReplconfListeningPort();
+    bool sendReplconfCapa();
     // Read and validate the master's PONG reply.
     bool receivePong();
     bool receiveOk();
-    bool sendReplconfListeningPort();
-    bool sendReplconfCapa();
+    //psync commands
+    bool sendPsync();
+    bool receiveFullresync(); 
 
 
     ReplicationConfig replication_config_;

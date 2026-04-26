@@ -7,8 +7,8 @@
 
 #include "replication_manager.hpp"
 
-ReplicationManager::ReplicationManager(const ReplicationConfig& replication_config)
-    : replication_config_(replication_config) {}
+// ReplicationManager::ReplicationManager(const ReplicationConfig& replication_config)
+//     : replication_config_(replication_config) {}
 
 ReplicationManager::~ReplicationManager() = default;
 
@@ -16,7 +16,8 @@ ReplicationManager::ReplicationManager(const ReplicationConfig& replication_conf
     : replication_config_(replication_config), replica_port_(replica_port) {}
 
 bool ReplicationManager::start_handshake() {
-    return connectToMaster() && sendPing() && receivePong() && sendReplconfListeningPort() && sendReplconfCapa();
+    return connectToMaster() && sendPing() && receivePong() && sendReplconfListeningPort() && sendReplconfCapa() && 
+           sendPsync();;
 }
 
 bool ReplicationManager::sendPing() {
@@ -82,6 +83,39 @@ bool ReplicationManager::send_to_master(std::string str){
     int ret = send(master_fd_, str.c_str(), str.length(), 0); 
     if(ret <0) return false;
     return true;
+}
+
+bool ReplicationManager::sendPsync() {
+    // PSYNC ? -1
+    // * = 3 elements: PSYNC, ?, -1
+    // $5 = length of "PSYNC"
+    // $1 = length of "?"
+    // $2 = length of "-1"
+    std::string psync = "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n";
+    if (!send_to_master(psync)) {
+        return false;
+    }
+    return receiveFullresync();
+}
+
+bool ReplicationManager::receiveFullresync() {
+    char buffer[1024];
+    int n = recv(master_fd_, buffer, sizeof(buffer) - 1, 0);
+    if (n <= 0) {
+        std::cerr << "Failed to receive FULLRESYNC from master\n";
+        return false;
+    }
+    buffer[n] = '\0';
+    std::string response(buffer);
+    
+    // Response format: +FULLRESYNC <REPL_ID> <OFFSET>\r\n
+    // For now, just verify it starts with +FULLRESYNC
+    if (response.find("+FULLRESYNC") == 0) {
+        std::cout << "Received FULLRESYNC: " << response;
+        return true;
+    }
+    std::cerr << "Unexpected FULLRESYNC response: " << response << "\n";
+    return false;
 }
 
 bool ReplicationManager::connectToMaster() {
