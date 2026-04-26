@@ -42,6 +42,7 @@ class resp_parser {
         static std::optional<std::pair<resp_value, size_t>> decode(const std::string& buffer);
 
     private:
+        static std::string encode_simple_string(const std::string& s);
         static std::string encode_bulk_str(const std::string& s);
         static std::string encode_array(const std::vector<resp_value>& v);
 

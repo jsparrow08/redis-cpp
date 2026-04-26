@@ -62,7 +62,10 @@ std::optional<std::string> CommandHandler::handleCommand(int bytes, char buffer[
         } else {
             response = getInfo(ServerInfo::ALL);
         }
-    } else {
+    } else if (cmd == "REPLCONF") {
+        response = resp_parser::encode(resp_value::make_string("OK"));
+    }
+    else {
         return std::nullopt;
     }
 

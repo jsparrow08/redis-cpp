@@ -24,6 +24,10 @@ std::string resp_parser::encode_array(const std::vector<resp_value>& v) {
     return result;
 }
 
+std::string resp_parser::encode_simple_string(const std::string& s) {
+    return "+" + s + "\r\n";
+}
+
 std::optional<std::pair<resp_value, size_t>> resp_parser::decode(const std::string& buffer) {
     if (buffer.empty()) return std::nullopt;
 
