@@ -12,8 +12,11 @@ ReplicationManager::ReplicationManager(const ReplicationConfig& replication_conf
 
 ReplicationManager::~ReplicationManager() = default;
 
+ReplicationManager::ReplicationManager(const ReplicationConfig& replication_config, int replica_port)
+    : replication_config_(replication_config), replica_port_(replica_port) {}
+
 bool ReplicationManager::start_handshake() {
-    return connectToMaster() && sendPing() && receivePong();
+    return connectToMaster() && sendPing() && receivePong() && sendReplconfListeningPort() && sendReplconfCapa();
 }
 
 bool ReplicationManager::sendPing() {
@@ -25,8 +28,54 @@ bool ReplicationManager::sendPing() {
 
 bool ReplicationManager::receivePong() {
     // TODO: read and validate the master's PONG reply
-    
+    char buffer[1024];
+    int n = recv(master_fd_, buffer, sizeof(buffer) - 1, 0);
+    if (n <= 0) {
+        std::cerr << "Failed to receive PONG from master\n";
+        return false;
+    }
+    buffer[n] = '\0';  // Null-terminate for string comparison
+    std::string response(buffer);
+    if (response == "+PONG\r\n") {
+        return true;
+    }
+    std::cerr << "Unexpected PONG response: " << response << "\n";
+    return false;
     return true;
+}
+
+bool ReplicationManager::receiveOk() {
+    char buffer[1024];
+    int n = recv(master_fd_, buffer, sizeof(buffer) - 1, 0);
+    if (n <= 0) {
+        std::cerr << "Failed to receive OK from master\n";
+        return false;
+    }
+    buffer[n] = '\0';
+    std::string response(buffer);
+    if (response == "+OK\r\n") {
+        return true;
+    }
+    std::cerr << "Unexpected OK response: " << response << "\n";
+    return false;
+}
+
+bool ReplicationManager::sendReplconfListeningPort() {
+    std::string port_str = std::to_string(replica_port_);
+    std::string replconf = "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" +
+                           std::to_string(port_str.length()) + "\r\n" + port_str + "\r\n";
+    if (!send_to_master(replconf)) {
+        return false;
+    }
+    return receiveOk();
+}
+
+bool ReplicationManager::sendReplconfCapa() {
+    std::string replconf = "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n";
+    if (!send_to_master(replconf)) {
+        return false;
+    }
+    return receiveOk();
 }
 
 bool ReplicationManager::send_to_master(std::string str){

@@ -17,7 +17,7 @@ RedisServer::RedisServer(int port, const ReplicationConfig& rep_config)
 
 void RedisServer::run(){
     if(config.isReplica()){
-        replication_manager = std::make_unique<ReplicationManager>(config.getReplicationConfig());
+        replication_manager = std::make_unique<ReplicationManager>(config.getReplicationConfig(), config.getPort());
         if (!replication_manager->start_handshake()) {
             std::cerr << "master handshake exception";
             return;

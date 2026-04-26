@@ -6,6 +6,7 @@
 
 class ReplicationManager {
 public:
+    explicit ReplicationManager(const ReplicationConfig& replication_config, int replica_port);
     explicit ReplicationManager(const ReplicationConfig& replication_config);
     ~ReplicationManager();
 
@@ -21,7 +22,12 @@ private:
     bool sendPing();
     // Read and validate the master's PONG reply.
     bool receivePong();
+    bool receiveOk();
+    bool sendReplconfListeningPort();
+    bool sendReplconfCapa();
+
 
     ReplicationConfig replication_config_;
     int master_fd_ = -1;
+    int replica_port_;
 };
