@@ -64,7 +64,17 @@ std::optional<std::string> CommandHandler::handleCommand(int bytes, char buffer[
         }
     } else if (cmd == "REPLCONF") {
         response = resp_parser::encode(resp_value::make_string("OK"));
-    }
+    } else if (cmd == "PSYNC") {
+        const auto& replication_config = config_.getReplicationConfig();
+        if (std::holds_alternative<MasterConfig>(replication_config)) {
+            auto master_config = std::get<MasterConfig>(replication_config);
+            std::string repl_id = master_config.getReplicationId();
+            std::string fullresync = "FULLRESYNC " + repl_id + " 0";
+            response = resp_parser::encode(resp_value::make_string(fullresync));
+        } else {
+            return std::nullopt;  // Only masters can handle PSYNC
+        }
+    } 
     else {
         return std::nullopt;
     }
