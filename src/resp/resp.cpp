@@ -4,6 +4,7 @@
 std::string resp_parser::encode(const resp_value& val) {
     switch (val.type) {
         case RespType::SIMPLE_STRING: return "+" + std::get<std::string>(val.data) + "\r\n";
+        case RespType::ERROR:         return "-" + std::get<std::string>(val.data) + "\r\n";
         case RespType::INTEGER:      return ":" + std::to_string(std::get<long long>(val.data)) + "\r\n";
         case RespType::BULK_STRING:   return encode_bulk_str(std::get<std::string>(val.data));
         case RespType::ARRAY:        return encode_array(std::get<std::vector<resp_value>>(val.data));
@@ -54,7 +55,7 @@ std::optional<std::pair<resp_value, size_t>> resp_parser::decode(const std::stri
         if (buffer.length() < total_consumed + len + 2) return std::nullopt;
         
         std::string body = buffer.substr(total_consumed, len);
-        return std::make_pair(resp_value::make_string(body), total_consumed + len + 2);
+        return std::make_pair(resp_value::make_bulk_string(body), total_consumed + len + 2);
     }
     else if (type_prefix == '*') {
         // --- ARRAY DECODING ---

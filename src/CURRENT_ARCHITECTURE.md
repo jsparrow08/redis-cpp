@@ -330,6 +330,7 @@ graph TB
         MASTER_SERVER["RedisServer<br/>Role: master"]
         MASTER_STORE["RDStore<br/>Master data"]
         MASTER_POLL["Poll Loop<br/>Accepts replicas"]
+        MASTER_RDB["RDB Generator<br/>Empty RDB Hex"]
     end
 
     subgraph "Replica Server"
@@ -340,21 +341,28 @@ graph TB
 
     subgraph "Handshake Protocol"
         CONNECT["TCP Connect<br/>to Master"]
-        SEND_PING["Send PING<br/>RESP format"]
-        RECV_PONG["Receive PONG<br/>Validate response"]
-        SUCCESS["Handshake Success<br/>Keep connection"]
+        SEND_PING["Send PING<br/>Receive PONG"]
+        SEND_REPLCONF["Send REPLCONF<br/>port & capa"]
+        SEND_PSYNC["Send PSYNC<br/>? -1"]
+        RECV_FULLRESYNC["Receive FULLRESYNC<br/>+ RDB File"]
+        SUCCESS["Handshake Success<br/>Sync complete"]
     end
 
     REPLICA_SERVER -->|Init| REPLICA_MGR
     REPLICA_MGR -->|1| CONNECT
     CONNECT -->|2| SEND_PING
-    SEND_PING -->|3| RECV_PONG
-    RECV_PONG -->|4| SUCCESS
+    SEND_PING -->|3| SEND_REPLCONF
+    SEND_REPLCONF -->|4| SEND_PSYNC
+    SEND_PSYNC -->|5| RECV_FULLRESYNC
+    RECV_FULLRESYNC -->|6| SUCCESS
 
     MASTER_POLL -->|Accept| MASTER_SERVER
     MASTER_SERVER -->|Handle PING| MASTER_STORE
     MASTER_STORE -->|Return PONG| MASTER_SERVER
-    MASTER_SERVER -->|Send PONG| REPLICA_MGR
+    MASTER_SERVER -->|Handle REPLCONF| MASTER_STORE
+    MASTER_SERVER -->|Handle PSYNC| MASTER_RDB
+    MASTER_RDB -->|Return FULLRESYNC + RDB| MASTER_SERVER
+    MASTER_SERVER -->|Send Responses| REPLICA_MGR
 ```
 
 <!-- 

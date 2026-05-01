@@ -1,4 +1,6 @@
 #include "server.hpp"
+#include <algorithm>
+#include <set>
 
 //////helpers
 int set_nonblocking(int fd)
@@ -77,25 +79,37 @@ int RedisServer::handle_client_request(int client_fd){
     char buffer[1024];
     int bytes = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
     if (bytes > 0) {
+        // Extract command name before processing
+        auto command_name = extract_command_name(std::string(buffer, bytes));
+        
         auto ret = command_handler->handleCommand(bytes, buffer);
         if (ret.has_value()) {
 
             std::string response = *ret;
             // std::cout<<"response : "<<response<<"\n";
             send(client_fd, response.c_str(), response.length(), 0);
+            
+            // Register as replica connection if PSYNC command and server is master
+            if (command_name.has_value() && command_name.value() == "PSYNC" && !config.isReplica()) {
+                register_replica_connection(client_fd);
+            }
+            
+            // Propagate write commands to replicas if server is master
+            if (command_name.has_value() && is_write_command(command_name.value()) && !config.isReplica()) {
+                // Re-construct the command as RESP for propagation
+                std::string raw_command(buffer, bytes);
+                propagate_command_to_replicas(raw_command);
+            }
+            
             return 0;
         }
-        // If command handling failed, close (optional, depending on your logic)
     return -1;
-        } else if (bytes == 0) {
-        // Connection closed by client
+    } else if (bytes == 0) {
         return -1;
     } else {
-        // Error: check if it's just no data available
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 0;  // No data, but keep connection open
+            return 0;  
         } else {
-            // Other error, close connection
             return -1;
         }
     }
@@ -129,6 +143,57 @@ std::string RedisServer::get_info(ServerInfo flag){
     return resp_parser::encode(resp_value::make_bulk_string(info_body));
 }
 
+bool RedisServer::is_write_command(const std::string& command_name) {
+    static const std::set<std::string> write_commands = {
+        "SET", "DEL"
+        // Add more write commands as needed
+    };
+    
+    return write_commands.find(command_name) != write_commands.end();
+}
+
+std::optional<std::string> RedisServer::extract_command_name(const std::string& raw_input) {
+    // Parse RESP array to extract command name
+    auto decode_result = resp_parser::decode(raw_input);
+    if (!decode_result) {
+        return std::nullopt;
+    }
+    
+    struct resp_value res = decode_result->first;
+    if (res.type != RespType::ARRAY) {
+        return std::nullopt;
+    }
+    
+    auto arr = std::get<std::vector<resp_value>>(res.data);
+    if (arr.empty() || arr[0].type != RespType::BULK_STRING) {
+        return std::nullopt;
+    }
+    
+    std::string cmd = std::get<std::string>(arr[0].data);
+    std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
+    return cmd;
+}
+
+void RedisServer::register_replica_connection(int client_fd) {
+    replica_connections.insert(client_fd);
+    std::cout << "Registered replica connection on fd: " << client_fd << std::endl;
+}
+
+void RedisServer::propagate_command_to_replicas(const std::string& command_resp) {
+    if (replica_connections.empty()) {
+        return;  
+    }
+    
+    std::cout << "Propagating command to " << replica_connections.size() << " replica(s)" << std::endl;
+    
+    for (int replica_fd : replica_connections) {
+        int bytes_sent = send(replica_fd, command_resp.c_str(), command_resp.length(), 0);
+        if (bytes_sent < 0) {
+            std::cerr << "Failed to send command to replica fd: " << replica_fd << std::endl;
+            // Optionally remove the replica from tracking if send fails
+        }
+    }
+}
 
 
 

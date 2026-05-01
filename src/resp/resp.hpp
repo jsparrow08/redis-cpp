@@ -31,6 +31,7 @@ struct resp_value {
     static resp_value make_integer(long long value) {return resp_value{RespType::INTEGER, value}; }
     static resp_value make_array(const std::vector<resp_value>& value) {return resp_value{RespType::ARRAY, value}; }
     static resp_value make_null() {return resp_value{RespType::NIL, nullptr}; }
+    static resp_value make_error(const std::string& value) {return resp_value{RespType::ERROR, value}; }
 
 };
 
