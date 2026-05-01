@@ -54,3 +54,34 @@ std::optional<std::string> CommandHandler::handleCommand(int bytes, char buffer[
     // Execute command
     return it->second(arr, rd_store_, config_);
 }
+
+// New overload: handle command from parsed RESP with source tracking
+std::optional<std::string> CommandHandler::handleCommand(
+    const std::vector<resp_value>& args, 
+    CommandSource source
+) {
+    if (args.empty() || args[0].type != RespType::BULK_STRING) {
+        return cmd_utils::makeErrorResponse("ERR invalid command format");
+    }
+    
+    // Extract command name and convert to uppercase for case-insensitive matching
+    std::string cmd = std::get<std::string>(args[0].data);
+    std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
+    
+    // Look up command in registry
+    auto it = registry_.find(cmd);
+    if (it == registry_.end()) {
+        return cmd_utils::makeErrorResponse("ERR unknown command '" + cmd + "'");
+    }
+    
+
+    auto response = it->second(args, rd_store_, config_);
+    
+
+    if (source == CommandSource::REPLICATION) {
+        
+        return std::nullopt;
+    }
+    
+    return response;
+}

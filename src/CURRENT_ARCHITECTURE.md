@@ -1,6 +1,6 @@
 # Current Implementation Architecture Diagrams
 
-## High-Level System Architecture
+## High-Level System Architecture (Async Redis-Style)
 
 ```mermaid
 graph TB
@@ -15,9 +15,14 @@ graph TB
         SOCKET["Raw Sockets<br/>Non-blocking"]
     end
 
+    subgraph "Connection Management"
+        CONNMAP["std::map<fd, Connection><br/>All active connections"]
+        MASTER_FD["master_fd<br/>Replica to Master"]
+    end
+
     subgraph "Processing Layer"
-        SERVER["RedisServer<br/>Single Thread"]
-        PARSER["RESP Parser<br/>Synchronous"]
+        SERVER["RedisServer<br/>Async Event Loop"]
+        CMD_HANDLER["CommandHandler<br/>Sync execution"]
         STORE["RDStore<br/>In-Memory"]
         REPL_MGR["ReplicationManager<br/>Handshake & Sync"]
     end
@@ -28,341 +33,322 @@ graph TB
         MUTEX["Shared Mutex<br/>Thread Safety"]
     end
 
-    C1 -->|TCP Connection| POLL
-    C2 -->|TCP Connection| POLL
-    CN -->|TCP Connection| POLL
+    C1 -->|TCP| POLL
+    C2 -->|TCP| POLL
+    CN -->|TCP| POLL
 
     POLL -->|Events| SERVER
-    SERVER -->|Parse Request| PARSER
-    PARSER -->|Command + Args| SERVER
-    SERVER -->|Execute| STORE
-    SERVER -->|Init Replica| REPL_MGR
+    SERVER -->|Manage| CONNMAP
+    SERVER -->|Track| MASTER_FD
+    
+    SERVER -->|Parse & Execute| CMD_HANDLER
+    CMD_HANDLER -->|Read/Write| STORE
+    SERVER -->|Init| REPL_MGR
+    REPL_MGR -->|Connect| MASTER_FD
 
-    STORE -->|Read/Write| KV_MAP
-    STORE -->|Read/Write| EXPIRY_MAP
+    STORE -->|Access| KV_MAP
+    STORE -->|Track| EXPIRY_MAP
     STORE -->|Protect| MUTEX
 
-    REPL_MGR -->|Connect to Master| SOCKET
-    REPL_MGR -->|Send/Recv Handshake| POLL
-
-    SERVER -->|Response| C1
-    SERVER -->|Response| C2
-    SERVER -->|Response| CN
+    SERVER -->|Queue Response| CONNMAP
+    CONNMAP -->|Send| C1
+    CONNMAP -->|Send| C2
+    CONNMAP -->|Send| CN
 ```
 
-## Component Interaction Flow
+## Connection State Machine
 
 ```mermaid
-sequenceDiagram
-    participant Client
-    participant Poll
-    participant RedisServer
-    participant RESP_Parser
-    participant RDStore
-    participant ReplicationManager
-    participant Mutex
-
-    Client->>Poll: Send RESP Request
-    Poll->>RedisServer: Notify Readable FD
-    RedisServer->>RedisServer: recv() into buffer[1024]
-    RedisServer->>RESP_Parser: decode(input)
-    RESP_Parser->>RedisServer: Return parsed command
-    RedisServer->>RDStore: Execute command
-    RDStore->>Mutex: Acquire lock
-    Mutex->>RDStore: Lock granted
-    RDStore->>RDStore: Access data maps
-    RDStore->>Mutex: Release lock
-    RDStore->>RedisServer: Return result
-    RedisServer->>RedisServer: Encode response
-    RedisServer->>Client: send() response
-
-    Note over RedisServer,ReplicationManager: Replica Mode Only
-    RedisServer->>ReplicationManager: start_handshake()
-    ReplicationManager->>ReplicationManager: connectToMaster()
-    ReplicationManager->>ReplicationManager: sendPing()
-    ReplicationManager->>ReplicationManager: receivePong()
-    ReplicationManager->>RedisServer: Handshake result
+stateDiagram-v2
+    [*] --> ACCEPTED: accept()
+    
+    ACCEPTED --> CLIENT_COMMAND_WAITING: Set source=CLIENT
+    ACCEPTED --> HANDSHAKING: Replica connection
+    
+    CLIENT_COMMAND_WAITING --> CLIENT_COMMAND_WAITING: Process commands
+    CLIENT_COMMAND_WAITING --> COMMAND_STREAMING: PSYNC detected
+    
+    HANDSHAKING --> RDB_SYNCING: Replica after handshake
+    RDB_SYNCING --> COMMAND_STREAMING: RDB complete
+    
+    COMMAND_STREAMING --> COMMAND_STREAMING: Receive propagated cmds
+    
+    CLIENT_COMMAND_WAITING --> CLOSING: Error or disconnect
+    COMMAND_STREAMING --> CLOSING: Error or disconnect
+    
+    CLOSING --> [*]: close(fd)
 ```
 
-## Data Type Architecture
+## Async Event Loop Pipeline
 
 ```mermaid
 graph LR
-    RDStore["RDStore Class"]
-
-    subgraph "Data Structures"
-        KV["unordered_map<string, RDObj>"]
-        EXPIRY["unordered_map<string, long long>"]
-    end
-
-    subgraph "RDObj Structure"
-        VAL["string val"]
-        TYPE["ValType (STRING only)"]
-    end
-
-    subgraph "Expiry Management"
-        PASSIVE["Passive Expiry<br/>On Access Only"]
-        NO_CLEANUP["No Active Cleanup"]
-    end
-
-    RDStore -->|Stores| KV
-    RDStore -->|Tracks| EXPIRY
-    KV -->|Contains| VAL
-    KV -->|Contains| TYPE
-    EXPIRY -->|Uses| PASSIVE
-    EXPIRY -->|No| NO_CLEANUP
+    POLL["poll() on all fds"]
+    READABLE["Handle POLLIN<br/>Readable events"]
+    WRITABLE["Handle POLLOUT<br/>Writable events"]
+    
+    READ_FN["process_readable_connection()"]
+    PARSE["try_parse_command()"]
+    EXEC["handleCommand()"]
+    QUEUE["queue_response()"]
+    
+    WRITE_FN["process_writable_connection()"]
+    FLUSH["flush_output_buffer()"]
+    SEND["send() bytes"]
+    
+    POLL -->|Active| READABLE
+    POLL -->|Active| WRITABLE
+    
+    READABLE -->|Read data| READ_FN
+    READ_FN -->|Accumulate| PARSE
+    PARSE -->|Complete RESP| EXEC
+    EXEC -->|Result| QUEUE
+    QUEUE -->|Update buffers| POLL
+    
+    WRITABLE -->|Has data| WRITE_FN
+    WRITE_FN -->|Drain| FLUSH
+    FLUSH -->|Partial| SEND
+    SEND -->|Erase sent| POLL
 ```
 
-## Thread Model
+## Connection Object Architecture
+
+```mermaid
+graph TB
+    subgraph "Connection struct"
+        FD["int fd<br/>File descriptor"]
+        STATE["ConnectionState state<br/>Current state"]
+        SOURCE["CommandSource source<br/>CLIENT or REPLICATION"]
+        IN_BUF["string input_buffer<br/>Accumulated incoming RESP"]
+        OUT_BUF["string output_buffer<br/>Queued responses"]
+        IS_REPLICA["bool is_replica_connection<br/>Marks replica connections"]
+        RDB_BYTES["uint64_t rdb_remaining_bytes<br/>RDB sync tracking"]
+        BYTES_PROC["size_t bytes_processed<br/>Parse state"]
+    end
+    
+    MAP["std::map<int fd, Connection>"]
+    MAP -->|Stores| FD
+    MAP -->|Stores| STATE
+    MAP -->|Stores| SOURCE
+    MAP -->|Stores| IN_BUF
+    MAP -->|Stores| OUT_BUF
+    MAP -->|Stores| IS_REPLICA
+    MAP -->|Stores| RDB_BYTES
+    MAP -->|Stores| BYTES_PROC
+```
+
+## Data Flow: Client Write Command Propagation
+
+```mermaid
+sequenceDiagram
+    participant Client as Redis-CLI
+    participant Master as Master Server
+    participant Replica as Replica Server
+    
+    Note over Client,Master: 1. Client sends SET command
+    Client->>Master: SET foo 1 (RESP)
+    Master->>Master: recv() into Connection.input_buffer
+    Master->>Master: try_parse_command() → RESP array
+    Master->>Master: handleCommand(args, CLIENT)
+    Master->>Master: RDStore.set(foo, 1)
+    Master->>Master: queue_response(+OK)
+    Master->>Client: send(+OK)
+    
+    Note over Master,Replica: 2. Master propagates to replica
+    Master->>Master: is_write_cmd = true (SET)
+    Master->>Master: propagate_write_command(args)
+    Master->>Master: Find replica connections
+    Master->>Master: queue_response(replica_fd, SET cmd)
+    
+    Note over Replica: 3. Replica receives on master_fd
+    Replica->>Replica: poll() detects master_fd readable
+    Replica->>Replica: recv() into Connection.input_buffer
+    Replica->>Replica: try_parse_command() → RESP array
+    Replica->>Replica: process_replicated_command()
+    Replica->>Replica: handleCommand(args, REPLICATION)
+    Replica->>Replica: RDStore.set(foo, 1) - no response queued
+```
+
+## Buffered I/O Architecture
+
+```mermaid
+graph TB
+    subgraph "Read Path"
+        RECV_CALL["recv() non-blocking"]
+        APPEND["Append to<br/>input_buffer"]
+        PARSE_LOOP["While buffer not empty"]
+        TRY_PARSE["try_parse_command()"]
+        HAS_COMPLETE["Complete RESP?"]
+        ERASE_BYTES["Erase parsed bytes<br/>from buffer"]
+        EXECUTE["Execute command"]
+        QUEUE_RESP["queue_response()"]
+    end
+    
+    subgraph "Write Path"
+        HAS_DATA["output_buffer<br/>not empty?"]
+        SEND_CALL["send() partial"]
+        ERASE_SENT["Erase sent bytes<br/>from buffer"]
+        RETRY["Wait for<br/>POLLOUT again"]
+    end
+    
+    RECV_CALL -->|Data| APPEND
+    APPEND -->|Loop| PARSE_LOOP
+    PARSE_LOOP -->|Check| TRY_PARSE
+    TRY_PARSE -->|Incomplete| RECV_CALL
+    TRY_PARSE -->|Complete| HAS_COMPLETE
+    HAS_COMPLETE -->|Yes| ERASE_BYTES
+    ERASE_BYTES -->|Next| EXECUTE
+    EXECUTE -->|Result| QUEUE_RESP
+    QUEUE_RESP -->|Update| HAS_DATA
+    
+    HAS_DATA -->|Yes| SEND_CALL
+    SEND_CALL -->|Partial| ERASE_SENT
+    ERASE_SENT -->|Pending| RETRY
+    RETRY -->|POLLOUT| SEND_CALL
+```
+
+## Replication Command Processing
+
+```mermaid
+graph TB
+    subgraph "Master Side"
+        M_RECV["Receive client cmd<br/>fd: client socket"]
+        M_PARSE["Parse to RESP array"]
+        M_EXEC["Execute command<br/>Update master state"]
+        M_RESP["Queue +OK response<br/>to client_fd"]
+        M_DETECT["Detect write command<br/>(SET, DEL, etc)"]
+        M_PROP["Find replica connections<br/>is_replica_connection=true"]
+        M_QUEUE["Queue RESP array<br/>in replica_fd.output_buffer"]
+        M_FLUSH["Poll detects POLLOUT<br/>on replica_fd"]
+        M_SEND["send() propagated command"]
+    end
+    
+    subgraph "Replica Side"
+        R_POLL["poll() on master_fd"]
+        R_RECV["recv() from master_fd<br/>into input_buffer"]
+        R_PARSE["try_parse_command()"]
+        R_SOURCE["source=REPLICATION<br/>state=COMMAND_STREAMING"]
+        R_EXEC["handleCommand()<br/>with REPLICATION source"]
+        R_APPLY["RDStore.set()<br/>Apply to local data"]
+        R_NO_RESP["Return nullopt<br/>No response queued"]
+    end
+    
+    M_RECV -->|Process| M_PARSE
+    M_PARSE -->|Execute| M_EXEC
+    M_EXEC -->|Respond| M_RESP
+    M_EXEC -->|Check| M_DETECT
+    M_DETECT -->|Yes| M_PROP
+    M_PROP -->|Queue| M_QUEUE
+    M_QUEUE -->|Poll ready| M_FLUSH
+    M_FLUSH -->|Send| M_SEND
+    M_SEND -->|Arrives at| R_POLL
+    
+    R_POLL -->|Readable| R_RECV
+    R_RECV -->|Buffer| R_PARSE
+    R_PARSE -->|Parsed| R_SOURCE
+    R_SOURCE -->|Execute| R_EXEC
+    R_EXEC -->|Apply| R_APPLY
+    R_APPLY -->|Silent| R_NO_RESP
+```
+
+## Thread Model (Still Single-Threaded)
 
 ```mermaid
 graph TB
     MAIN["Main Thread<br/>Single Threaded"]
 
-    subgraph "Event Loop"
-        POLL_LOOP["Poll Loop<br/>while(true)"]
-        ACCEPT_LOOP["Accept Loop<br/>while(true)"]
-        PROCESS_LOOP["Process Clients<br/>Sequential"]
-        REPL_INIT["Replication Init<br/>Before Loop"]
+    subgraph "Initialization Phase"
+        CHECK_REPLICA["Check if replica mode"]
+        INIT_REPL["setup_replica_mode()"]
+        HANDSHAKE["start_handshake()"]
+        GET_FD["get_master_fd()"]
+        SETUP_SOCK["setup_server_socket()"]
     end
 
-    subgraph "Operations"
-        RECV["recv() calls<br/>Non-blocking"]
-        PARSE["Parse RESP<br/>Synchronous"]
-        EXECUTE["Execute Commands<br/>Sequential"]
-        SEND["send() calls<br/>Non-blocking"]
-        HANDSHAKE["Handshake Ops<br/>Blocking"]
+    subgraph "Main Event Loop"
+        BUILD_POLL["Build pollfd array<br/>from connections map"]
+        CALL_POLL["poll(fds, -1)<br/>Block until event"]
+        ITERATE["For each event fd"]
+        CHECK_NEW["Is server_fd?"]
+        CHECK_READ["Has POLLIN?"]
+        CHECK_WRITE["Has POLLOUT?"]
+        ACCEPT_CONN["accept_new_connection()"]
+        READ_CONN["process_readable_connection()"]
+        WRITE_CONN["process_writable_connection()"]
     end
 
-    MAIN -->|Runs| REPL_INIT
-    REPL_INIT -->|Then| POLL_LOOP
-    POLL_LOOP -->|Handles| ACCEPT_LOOP
-    POLL_LOOP -->|Handles| PROCESS_LOOP
-
-    PROCESS_LOOP -->|Calls| RECV
-    PROCESS_LOOP -->|Calls| PARSE
-    PROCESS_LOOP -->|Calls| EXECUTE
-    PROCESS_LOOP -->|Calls| SEND
-    REPL_INIT -->|Calls| HANDSHAKE
+    MAIN -->|Init| CHECK_REPLICA
+    CHECK_REPLICA -->|Yes| INIT_REPL
+    CHECK_REPLICA -->|No| SETUP_SOCK
+    INIT_REPL -->|Connect| HANDSHAKE
+    HANDSHAKE -->|Get fd| GET_FD
+    GET_FD -->|Then| SETUP_SOCK
+    SETUP_SOCK -->|Start loop| BUILD_POLL
+    
+    BUILD_POLL -->|Poll| CALL_POLL
+    CALL_POLL -->|Events| ITERATE
+    ITERATE -->|Check| CHECK_NEW
+    CHECK_NEW -->|Yes| ACCEPT_CONN
+    CHECK_NEW -->|No| CHECK_READ
+    CHECK_READ -->|Yes| READ_CONN
+    CHECK_READ -->|No| CHECK_WRITE
+    CHECK_WRITE -->|Yes| WRITE_CONN
+    WRITE_CONN -->|Loop| BUILD_POLL
 ```
 
-## Memory Layout
-
-```mermaid
-graph TB
-    subgraph "Heap Memory"
-        SERVER_OBJ["RedisServer Object"]
-        STORE_OBJ["RDStore Object"]
-        CONFIG_OBJ["ServerConfig Object"]
-        KV_DATA["unordered_map data<br/>Key-Value pairs"]
-        EXPIRY_DATA["unordered_map data<br/>Expiry timestamps"]
-    end
-
-    subgraph "Stack Memory"
-        BUFFER["char buffer[1024]<br/>Per client read"]
-        TEMP_VARS["Temporary Variables<br/>Command processing"]
-    end
-
-    subgraph "Static/Global"
-        MUTEX_OBJ["shared_mutex<br/>Single instance"]
-    end
-
-    SERVER_OBJ -->|Contains| STORE_OBJ
-    SERVER_OBJ -->|Contains| CONFIG_OBJ
-    STORE_OBJ -->|Contains| KV_DATA
-    STORE_OBJ -->|Contains| EXPIRY_DATA
-    STORE_OBJ -->|Contains| MUTEX_OBJ
-```
-
-## Command Processing Pipeline
-
-```mermaid
-graph LR
-    INPUT["Raw TCP Data<br/>Up to 1024 bytes"]
-    RECV["recv() into buffer"]
-    STRING["Convert to string"]
-    DECODE["RESP decode()"]
-    VALIDATE["Check ARRAY type"]
-    EXTRACT["Extract command<br/>and args"]
-    ROUTE["Switch on command<br/>string"]
-    EXECUTE["Call RDStore methods"]
-    ENCODE["RESP encode()"]
-    SEND["send() to client"]
-
-    INPUT -->|TCP Stream| RECV
-    RECV -->|Bytes| STRING
-    STRING -->|String| DECODE
-    DECODE -->|resp_value| VALIDATE
-    VALIDATE -->|Valid| EXTRACT
-    EXTRACT -->|Command| ROUTE
-    ROUTE -->|SET/GET/etc| EXECUTE
-    EXECUTE -->|Result| ENCODE
-    ENCODE -->|RESP bytes| SEND
-```
-
-## Network Architecture
-
-```mermaid
-graph TB
-    subgraph "Socket Layer"
-        SERVER_SOCKET["Server Socket<br/>server_fd"]
-        CLIENT_SOCKETS["Client Sockets<br/>client_fd[1..N]"]
-    end
-
-    subgraph "I/O Multiplexing"
-        POLL_FDS["pollfd array<br/>Server + clients"]
-        POLLIN_EVENTS["POLLIN events<br/>Readable data"]
-    end
-
-    subgraph "Connection Management"
-        ACCEPT["accept() calls<br/>In loop"]
-        CLOSE["close() calls<br/>On errors"]
-        NONBLOCK["O_NONBLOCK flag<br/>All sockets"]
-    end
-
-    SERVER_SOCKET -->|Added to| POLL_FDS
-    CLIENT_SOCKETS -->|Added to| POLL_FDS
-    POLL_FDS -->|Generates| POLLIN_EVENTS
-    POLLIN_EVENTS -->|Triggers| ACCEPT
-    POLLIN_EVENTS -->|Triggers| CLOSE
-    ACCEPT -->|Creates| CLIENT_SOCKETS
-    CLOSE -->|Removes from| POLL_FDS
-```
-
-## Storage Access Pattern
-
-```mermaid
-graph TB
-    subgraph "Read Operations (GET)"
-        READ_LOCK["shared_lock<br/>Reader lock"]
-        FIND_KEY["find() in rd_map"]
-        CHECK_EXPIRY["Check expiry_map"]
-        CALC_TIME["get_current_time_ms()"]
-        ERASE_EXPIRED["erase() if expired"]
-        RETURN_VALUE["Return value or nullopt"]
-    end
-
-    subgraph "Write Operations (SET)"
-        WRITE_LOCK["unique_lock<br/>Writer lock"]
-        INSERT_KV["rd_map[key] = value"]
-        INSERT_EXPIRY["expiry_map[key] = time"]
-        RETURN_TRUE["Return true"]
-    end
-
-    READ_LOCK -->|Allows| FIND_KEY
-    FIND_KEY -->|Found| CHECK_EXPIRY
-    CHECK_EXPIRY -->|Expired| ERASE_EXPIRED
-    CHECK_EXPIRY -->|Valid| RETURN_VALUE
-    ERASE_EXPIRED -->|Return| RETURN_VALUE
-
-    WRITE_LOCK -->|Allows| INSERT_KV
-    INSERT_KV -->|Then| INSERT_EXPIRY
-    INSERT_EXPIRY -->|Then| RETURN_TRUE
-```
-
-## Error Handling Flow
+## Error Handling & Connection Lifecycle
 
 ```mermaid
 graph TD
-    START["Client Request"]
-    RECV_ERROR["recv() < 0"]
-    PARSE_ERROR["decode() fails"]
-    INVALID_CMD["Unknown command"]
-    ARGS_ERROR["Wrong arguments"]
-    STORE_ERROR["Storage operation fails"]
-    ENCODE_ERROR["encode() fails"]
-    SEND_ERROR["send() fails"]
-    REPL_ERROR["Replication handshake fails"]
-    CLOSE_CLIENT["Close connection"]
-    SHUTDOWN["Server shutdown"]
-
-    START -->|Success| RECV_ERROR
-    RECV_ERROR -->|Error| CLOSE_CLIENT
-    RECV_ERROR -->|Success| PARSE_ERROR
-    PARSE_ERROR -->|Error| CLOSE_CLIENT
-    PARSE_ERROR -->|Success| INVALID_CMD
-    INVALID_CMD -->|Unknown| CLOSE_CLIENT
-    INVALID_CMD -->|Known| ARGS_ERROR
-    ARGS_ERROR -->|Invalid| CLOSE_CLIENT
-    ARGS_ERROR -->|Valid| STORE_ERROR
-    STORE_ERROR -->|Error| CLOSE_CLIENT
-    STORE_ERROR -->|Success| ENCODE_ERROR
-    ENCODE_ERROR -->|Error| CLOSE_CLIENT
-    ENCODE_ERROR -->|Success| SEND_ERROR
-    SEND_ERROR -->|Error| CLOSE_CLIENT
-    SEND_ERROR -->|Success| START
-
-    REPL_ERROR -->|On startup| SHUTDOWN
-```
-
-## Configuration Architecture
-
-```mermaid
-graph LR
-    subgraph "Command Line Args"
-        PORT_ARG["--port <num>"]
-        REPLICA_ARG["--replicaof <host> <port>"]
-    end
-
-    subgraph "Configuration Objects"
-        SERVER_CONFIG["ServerConfig struct"]
-        REPLICA_CONFIG["ReplicationConfig struct"]
-    end
-
-    subgraph "Runtime State"
-        CONNECTED_CLIENTS["client_connected counter"]
-        SERVER_ROLE["role string"]
-        USED_MEMORY["used_memory counter"]
-    end
-
-    PORT_ARG -->|Parsed| SERVER_CONFIG
-    REPLICA_ARG -->|Parsed| REPLICA_CONFIG
-    REPLICA_CONFIG -->|Sets| SERVER_ROLE
-    SERVER_CONFIG -->|Tracks| CONNECTED_CLIENTS
-    SERVER_CONFIG -->|Tracks| USED_MEMORY
-```
-
-## Replication Architecture
-
-```mermaid
-graph TB
-    subgraph "Master Server"
-        MASTER_SERVER["RedisServer<br/>Role: master"]
-        MASTER_STORE["RDStore<br/>Master data"]
-        MASTER_POLL["Poll Loop<br/>Accepts replicas"]
-        MASTER_RDB["RDB Generator<br/>Empty RDB Hex"]
-    end
-
-    subgraph "Replica Server"
-        REPLICA_SERVER["RedisServer<br/>Role: slave"]
-        REPLICA_MGR["ReplicationManager"]
-        REPLICA_STORE["RDStore<br/>Replica data"]
-    end
-
-    subgraph "Handshake Protocol"
-        CONNECT["TCP Connect<br/>to Master"]
-        SEND_PING["Send PING<br/>Receive PONG"]
-        SEND_REPLCONF["Send REPLCONF<br/>port & capa"]
-        SEND_PSYNC["Send PSYNC<br/>? -1"]
-        RECV_FULLRESYNC["Receive FULLRESYNC<br/>+ RDB File"]
-        SUCCESS["Handshake Success<br/>Sync complete"]
-    end
-
-    REPLICA_SERVER -->|Init| REPLICA_MGR
-    REPLICA_MGR -->|1| CONNECT
-    CONNECT -->|2| SEND_PING
-    SEND_PING -->|3| SEND_REPLCONF
-    SEND_REPLCONF -->|4| SEND_PSYNC
-    SEND_PSYNC -->|5| RECV_FULLRESYNC
-    RECV_FULLRESYNC -->|6| SUCCESS
-
-    MASTER_POLL -->|Accept| MASTER_SERVER
-    MASTER_SERVER -->|Handle PING| MASTER_STORE
-    MASTER_STORE -->|Return PONG| MASTER_SERVER
-    MASTER_SERVER -->|Handle REPLCONF| MASTER_STORE
-    MASTER_SERVER -->|Handle PSYNC| MASTER_RDB
-    MASTER_RDB -->|Return FULLRESYNC + RDB| MASTER_SERVER
-    MASTER_SERVER -->|Send Responses| REPLICA_MGR
+    ACCEPT_FD["accept() new connection"]
+    CREATE_CONN["Create Connection object<br/>state=CLIENT_COMMAND_WAITING"]
+    STORE_MAP["Store in connections map"]
+    
+    READABLE_EVENT["POLLIN event"]
+    RECV_DATA["recv() from fd"]
+    RECV_ERR{recv() result}
+    RECV_FAIL["recv() < 0"]
+    RECV_CLOSE["recv() == 0<br/>EOF"]
+    RECV_DATA_OK["recv() > 0"]
+    
+    APPEND_BUF["Append to<br/>input_buffer"]
+    PARSE_RESP["try_parse_command()"]
+    PARSE_OK["Complete RESP?"]
+    EXEC_CMD["Execute command"]
+    
+    WRITABLE_EVENT["POLLOUT event"]
+    FLUSH_BUF["Flush output_buffer"]
+    SEND_DATA["send() bytes"]
+    
+    HANDLE_CLOSE["handle_connection_close()"]
+    CLOSE_FD["close(fd)"]
+    ERASE_MAP["Erase from connections"]
+    
+    ACCEPT_FD -->|New| CREATE_CONN
+    CREATE_CONN -->|Store| STORE_MAP
+    STORE_MAP -->|Wait| READABLE_EVENT
+    
+    READABLE_EVENT -->|Read| RECV_DATA
+    RECV_DATA -->|Check| RECV_ERR
+    RECV_ERR -->|Error| RECV_FAIL
+    RECV_ERR -->|EOF| RECV_CLOSE
+    RECV_ERR -->|Data| RECV_DATA_OK
+    
+    RECV_FAIL -->|Close| HANDLE_CLOSE
+    RECV_CLOSE -->|Close| HANDLE_CLOSE
+    RECV_DATA_OK -->|Process| APPEND_BUF
+    APPEND_BUF -->|Parse| PARSE_RESP
+    PARSE_RESP -->|Check| PARSE_OK
+    PARSE_OK -->|Incomplete| READABLE_EVENT
+    PARSE_OK -->|Complete| EXEC_CMD
+    EXEC_CMD -->|Response| WRITABLE_EVENT
+    
+    WRITABLE_EVENT -->|Ready| FLUSH_BUF
+    FLUSH_BUF -->|Send| SEND_DATA
+    SEND_DATA -->|Done| READABLE_EVENT
+    
+    HANDLE_CLOSE -->|Cleanup| CLOSE_FD
+    CLOSE_FD -->|Remove| ERASE_MAP
 ```
 
 <!-- 

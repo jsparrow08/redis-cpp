@@ -7,13 +7,13 @@
 class ReplicationManager {
 public:
     explicit ReplicationManager(const ReplicationConfig& replication_config, int replica_port);
-    // explicit ReplicationManager(const ReplicationConfig& replication_config);
     ~ReplicationManager();
 
     // Start the replica handshake process.
     bool start_handshake();
-
     
+    // Get the master file descriptor (after handshake completes)
+    int get_master_fd() const { return master_fd_; }
 
 private:
     bool connectToMaster();
@@ -27,8 +27,8 @@ private:
     bool receiveOk();
     //psync commands
     bool sendPsync();
-    bool receiveFullresync(); 
-
+    bool receiveFullresync();
+    // bool receiveRdbFile();
 
     ReplicationConfig replication_config_;
     int master_fd_ = -1;

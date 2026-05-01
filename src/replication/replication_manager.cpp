@@ -112,6 +112,8 @@ bool ReplicationManager::receiveFullresync() {
     // For now, just verify it starts with +FULLRESYNC
     if (response.find("+FULLRESYNC") == 0) {
         std::cout << "Received FULLRESYNC: " << response;
+        // After FULLRESYNC, receive the RDB file
+        // return receiveRdbFile();
         return true;
     }
     std::cerr << "Unexpected FULLRESYNC response: " << response << "\n";

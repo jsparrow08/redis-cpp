@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <chrono>
+#include <map>
 #include <optional>
 #include <sys/poll.h>
 #include <unistd.h>
@@ -14,11 +14,11 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
-#include <set>
 #include "../config/config.hpp"
 #include "../command/command_handler.hpp"
 #include "../replication/replication_manager.hpp"
 #include "../resp/resp.hpp"
+#include "connection.hpp"
 
 
 class RedisServer{
@@ -32,15 +32,25 @@ class RedisServer{
         std::unique_ptr<CommandHandler> command_handler;
         std::unique_ptr<ReplicationManager> replication_manager;
         int server_fd;
-        std::set<int> replica_connections;  
+        int master_fd = -1;  // For replica mode: fd of connection to master
+        
+        // Map of all active connections (fd -> Connection)
+        std::map<int, Connection> connections;
 
         int setup_server_socket();
-        void handle_new_connection(std::vector<struct pollfd> &fds);
-        int handle_client_request(int client_fd);
-        std::string get_info(ServerInfo flag);
-        void propagate_command_to_replicas(const std::string& command_resp);
-        void register_replica_connection(int client_fd);
-        bool is_write_command(const std::string& command_name);
-        std::optional<std::string> extract_command_name(const std::string& raw_input);
+        void accept_new_connection();
+        void process_readable_connection(int fd);
+        void process_writable_connection(int fd);
+        void flush_output_buffer(int fd);
+        void handle_connection_close(int fd);
+        
+        // Replication-specific processing
+        void setup_replica_mode();
+        void process_replicated_command(int fd, const std::vector<resp_value>& parsed_command);
+        void propagate_write_command(const std::vector<resp_value>& args);
+        
+        // Helper methods
+        std::optional<std::pair<resp_value, size_t>> try_parse_command(Connection& conn);
+        void queue_response(int fd, const std::string& response);
 
 };

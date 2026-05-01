@@ -1048,4 +1048,7 @@ dkms.conf
 # Progress tracking for LLM context
 PROGRESS.md
 
+# Design patterns learning document (local reference)
+DESIGN_PATTERNS.md
+
 vcpkg_installed
