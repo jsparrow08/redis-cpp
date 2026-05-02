@@ -14,7 +14,8 @@ public:
     
     // Get the master file descriptor (after handshake completes)
     int get_master_fd() const { return master_fd_; }
-
+    std::string get_leftover_bytes() const { return leftover_bytes_; }
+    
 private:
     bool connectToMaster();
     bool send_to_master(std::string str);
@@ -31,6 +32,7 @@ private:
     // bool receiveRdbFile();
 
     ReplicationConfig replication_config_;
+    std::string leftover_bytes_;
     int master_fd_ = -1;
     int replica_port_;
 };

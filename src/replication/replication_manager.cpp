@@ -99,23 +99,53 @@ bool ReplicationManager::sendPsync() {
 }
 
 bool ReplicationManager::receiveFullresync() {
-    char buffer[1024];
-    int n = recv(master_fd_, buffer, sizeof(buffer) - 1, 0);
-    if (n <= 0) {
-        std::cerr << "Failed to receive FULLRESYNC from master\n";
-        return false;
-    }
-    buffer[n] = '\0';
-    std::string response(buffer);
+    std::string response;
+    char buffer[4096];
     
-    // Response format: +FULLRESYNC <REPL_ID> <OFFSET>\r\n
-    // For now, just verify it starts with +FULLRESYNC
+    // 1. Read until we see the start of the RDB file ($...) and its trailing \r\n
+    while (true) {
+        int n = recv(master_fd_, buffer, sizeof(buffer) - 1, 0);
+        if (n <= 0) return false;
+        
+        buffer[n] = '\0';
+        response.append(buffer, n);
+        
+        size_t rdb_idx = response.find("\r\n$");
+        if (rdb_idx != std::string::npos) {
+            if (response.find("\r\n", rdb_idx + 3) != std::string::npos) {
+                break; // We have the length header!
+            }
+        }
+    }
+    
     if (response.find("+FULLRESYNC") == 0) {
-        std::cout << "Received FULLRESYNC: " << response;
-        // After FULLRESYNC, receive the RDB file
-        // return receiveRdbFile();
+        std::cout << "Received FULLRESYNC\n";
+        
+        size_t rdb_idx = response.find("\r\n$");
+        size_t length_end = response.find("\r\n", rdb_idx + 3);
+        
+        // Parse the exact length of the RDB file
+        int rdb_length = std::stoi(response.substr(rdb_idx + 3, length_end - (rdb_idx + 3)));
+        size_t rdb_data_start = length_end + 2; // Move past the \r\n
+        int bytes_in_buffer = response.length() - rdb_data_start;
+        
+        // 2. Read the remaining binary RDB data if it wasn't fully captured in the first recv()
+        int bytes_remaining = rdb_length - bytes_in_buffer;
+        while (bytes_remaining > 0) {
+            int n = recv(master_fd_, buffer, std::min((int)sizeof(buffer) - 1, bytes_remaining), 0);
+            if (n <= 0) break;
+            bytes_remaining -= n;
+        }
+        
+        // 3. If we over-read (TCP packet contained RDB + REPLCONF GETACK command)
+        // Save it so we can hand it to the event loop!
+        if (bytes_in_buffer > rdb_length) {
+            leftover_bytes_ = response.substr(rdb_data_start + rdb_length);
+        }
+        
         return true;
     }
+    
     std::cerr << "Unexpected FULLRESYNC response: " << response << "\n";
     return false;
 }

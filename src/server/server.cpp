@@ -49,10 +49,10 @@ void RedisServer::run(){
             fds.push_back({fd, events, 0});
         }
         
-        // Add master fd if in replica mode
-        if(master_fd >= 0) {
-            fds.push_back({master_fd, POLLIN, 0});
-        }
+        // // Add master fd if in replica mode
+        // if(master_fd >= 0) {
+        //     fds.push_back({master_fd, POLLIN, 0});
+        // }
         
         int activity = poll(fds.data(), fds.size(), -1);
         if(activity < 0){ 
@@ -99,12 +99,29 @@ void RedisServer::setup_replica_mode() {
     }
     
     set_nonblocking(master_fd);
-    
-    // Create connection object for master
+
     Connection master_conn(master_fd, ConnectionState::COMMAND_STREAMING, CommandSource::REPLICATION);
+    master_conn.input_buffer = replication_manager->get_leftover_bytes();
     connections[master_fd] = master_conn;
     
     std::cout << "[REPLICA] Connected to master on fd: " << master_fd << std::endl;
+
+    Connection& conn = connections[master_fd];
+    while(!conn.input_buffer.empty()) {
+        auto parse_result = try_parse_command(conn);
+        if(!parse_result) {
+            break; 
+        }
+        
+        auto [parsed_value, bytes_consumed] = *parse_result;
+        conn.input_buffer.erase(0, bytes_consumed);
+        conn.bytes_processed = 0;
+        
+        if(parsed_value.type == RespType::ARRAY) {
+            auto arr = std::get<std::vector<resp_value>>(parsed_value.data);
+            process_replicated_command(master_fd, arr);
+        }
+    }
 }
 
 void RedisServer::accept_new_connection(){
@@ -302,6 +319,11 @@ void RedisServer::process_replicated_command(int fd, const std::vector<resp_valu
     std::cout << "[REPLICATION] Processing replicated command\n";
     
     auto response = command_handler->handleCommand(parsed_command, CommandSource::REPLICATION);
+    
+    // If there's a response (e.g., REPLCONF GETACK), queue it to send back to master
+    if(response.has_value()) {
+        queue_response(fd, *response);
+    }
     
     std::cout << "[REPLICATION] Command processed on replica\n";
 }

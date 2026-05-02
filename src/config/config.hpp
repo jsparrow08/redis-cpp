@@ -46,6 +46,7 @@ public:
     // Utility methods
     void incrementConnectedClients() { client_connected++; }
     void decrementConnectedClients() { client_connected = std::max(0, client_connected - 1); }
+    void incrementUsedMemory(int bytes_used) {used_memory+=bytes_used;}
 
 private:
     int port = 6379;

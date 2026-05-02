@@ -27,4 +27,12 @@ std::optional<std::string> get(
 // Syntax: GET key
 // Response: bulk_string or null
 
+std::optional<std::string> del(
+    const std::vector<resp_value>& args,
+    RDStore& store,
+    Config& config
+);
+// Syntax: DEL key [key ...]
+// Response: integer (number of keys deleted)
+
 }  // namespace commands::string_cmd

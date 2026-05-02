@@ -8,6 +8,8 @@
 #include <chrono>
 #include "../resp/resp.hpp"
 
+class Config;  // Forward declaration
+
 
 
 
@@ -62,18 +64,30 @@ class RDStore {
     public:
 
         RDStore() = default;
+        explicit RDStore(Config* config) : config_(config) {}
 
         // public apis//
         bool set(std::string &key, std::string &val, struct set_param *param); // Set entry
-        std::optional<std::string> get(std::string &key); // remove entry 
+        std::optional<std::string> get(std::string &key); // Get entry
+        bool del(std::string &key);  // Delete entry
+        
+        // Get total memory used by data store
+        long long getMemoryUsage() const { return total_memory_used; }
         
         // std::optional<std::string> HandleCommand(int bytes , char buffer[]);
 
     private:
 
+        Config* config_ = nullptr;  
+        long long total_memory_used = 0;  
+        
         std::shared_mutex mt;
         std::unordered_map<std::string,struct RDObj> rd_map;
         std::unordered_map<std::string,long long> expiry_map;
+        
+        // Helper methods for memory tracking
+        void updateMemoryUsage(int delta);
+        size_t calculateMemorySize(const std::string& key, const std::string& val) const;
 
 };
 

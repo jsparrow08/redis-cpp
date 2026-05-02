@@ -35,20 +35,5 @@ std::optional<std::string> info(
 // Syntax: INFO [section]
 // Response: bulk_string (server info)
 
-std::optional<std::string> replconf(
-    const std::vector<resp_value>& args,
-    RDStore& store,
-    Config& config
-);
-// Syntax: REPLCONF [options...]
-// Response: "+OK"
-
-std::optional<std::string> psync(
-    const std::vector<resp_value>& args,
-    RDStore& store,
-    Config& config
-);
-// Syntax: PSYNC replication-id offset
-// Response: "+FULLRESYNC replication-id offset" followed by RDB file
 
 }  // namespace commands::server_cmd

@@ -8,6 +8,11 @@ std::optional<std::string> set(
     RDStore& store,
     Config& config
 ) {
+
+    static bool initialized = false;
+    if (!initialized) {
+        initialized = true;
+    }
     try {
         cmd_utils::validateArgCount(args, 3, 5);
         
@@ -53,6 +58,10 @@ std::optional<std::string> get(
     RDStore& store,
     Config& config
 ) {
+    static bool initialized = false;
+    if (!initialized) {
+        initialized = true;
+    }
     try {
         cmd_utils::validateArgCount(args, 2, 2);
         
@@ -63,6 +72,30 @@ std::optional<std::string> get(
             return cmd_utils::makeNullResponse();
         }
         return cmd_utils::makeBulkStringResponse(*val);
+        
+    } catch (const std::exception& e) {
+        return cmd_utils::makeErrorResponse(std::string("ERR ") + e.what());
+    }
+}
+
+std::optional<std::string> del(
+    const std::vector<resp_value>& args,
+    RDStore& store,
+    Config& config
+) {
+    try {
+        cmd_utils::validateArgCount(args, 2, -1);  
+        
+        int deleted_count = 0;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            std::string key = cmd_utils::getStringArg(args, i);
+            if (store.del(key)) {
+                deleted_count++;
+            }
+        }
+        
+        return cmd_utils::makeIntegerResponse(deleted_count);
         
     } catch (const std::exception& e) {
         return cmd_utils::makeErrorResponse(std::string("ERR ") + e.what());
