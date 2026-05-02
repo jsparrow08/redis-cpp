@@ -47,6 +47,21 @@ public:
     void incrementConnectedClients() { client_connected++; }
     void decrementConnectedClients() { client_connected = std::max(0, client_connected - 1); }
     void incrementUsedMemory(int bytes_used) {used_memory+=bytes_used;}
+    
+    // Replication offset tracking for replicas
+    void incrementReplicaOffset(long long bytes) {
+        if (std::holds_alternative<SlaveConfig>(replication_config)) {
+            auto& slave_config = std::get<SlaveConfig>(replication_config);
+            slave_config.incrementReplicationOffset(bytes);
+        }
+    }
+    
+    long long getReplicaOffset() const {
+        if (std::holds_alternative<SlaveConfig>(replication_config)) {
+            return std::get<SlaveConfig>(replication_config).getReplicationOffset();
+        }
+        return 0;
+    }
 
 private:
     int port = 6379;

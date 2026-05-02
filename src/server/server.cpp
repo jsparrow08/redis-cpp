@@ -119,7 +119,7 @@ void RedisServer::setup_replica_mode() {
         
         if(parsed_value.type == RespType::ARRAY) {
             auto arr = std::get<std::vector<resp_value>>(parsed_value.data);
-            process_replicated_command(master_fd, arr);
+            process_replicated_command(master_fd, arr, bytes_consumed);
         }
     }
 }
@@ -209,7 +209,7 @@ void RedisServer::process_readable_connection(int fd) {
         // Process command based on connection state
         if(conn.state == ConnectionState::COMMAND_STREAMING) {
             // Replicated command from master - process without sending response
-            process_replicated_command(fd, arr);
+            process_replicated_command(fd, arr, bytes_consumed);
         } 
         else if(conn.state == ConnectionState::CLIENT_COMMAND_WAITING) {
             // Check if this is a write command (for propagation)
@@ -315,7 +315,7 @@ void RedisServer::handle_connection_close(int fd) {
     }
 }
 
-void RedisServer::process_replicated_command(int fd, const std::vector<resp_value>& parsed_command) {
+void RedisServer::process_replicated_command(int fd, const std::vector<resp_value>& parsed_command, size_t bytes_consumed) {
     std::cout << "[REPLICATION] Processing replicated command\n";
     
     auto response = command_handler->handleCommand(parsed_command, CommandSource::REPLICATION);
@@ -324,6 +324,10 @@ void RedisServer::process_replicated_command(int fd, const std::vector<resp_valu
     if(response.has_value()) {
         queue_response(fd, *response);
     }
+    
+    // Increment the replica offset by the number of bytes consumed
+    // This is done AFTER processing the command
+    config.incrementReplicaOffset(bytes_consumed);
     
     std::cout << "[REPLICATION] Command processed on replica\n";
 }

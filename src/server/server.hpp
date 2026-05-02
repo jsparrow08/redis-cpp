@@ -46,7 +46,7 @@ class RedisServer{
         
         // Replication-specific processing
         void setup_replica_mode();
-        void process_replicated_command(int fd, const std::vector<resp_value>& parsed_command);
+        void process_replicated_command(int fd, const std::vector<resp_value>& parsed_command, size_t bytes_consumed);
         void propagate_write_command(const std::vector<resp_value>& args);
         
         // Helper methods

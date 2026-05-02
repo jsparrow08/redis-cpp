@@ -34,15 +34,17 @@ std::optional<std::string> replconf(
         
         // Handle GETACK command
         if (subcommand_upper == "GETACK") {
-            // REPLCONF GETACK <offset_or_*>
-            // For now, hardcode offset to 0
+
+            long long offset = config.getReplicaOffset();
+            std::string offset_str = std::to_string(offset);
+            
+            // Build RESP array response: REPLCONF ACK <offset>
             std::vector<resp_value> ack_response;
             ack_response.push_back(resp_value::make_bulk_string("REPLCONF"));
             ack_response.push_back(resp_value::make_bulk_string("ACK"));
-            ack_response.push_back(resp_value::make_bulk_string("0"));
-            // std::string response = resp_parser::encode(resp_value::make_array(ack_response));
-            // std::cout<<"ACK_RESPONSE"<<response<<"\n";
-            std::string response = "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n";
+            ack_response.push_back(resp_value::make_bulk_string(offset_str));
+            
+            std::string response = resp_parser::encode(resp_value::make_array(ack_response));
             
             return response;
         }

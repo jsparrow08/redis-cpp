@@ -38,6 +38,7 @@ public:
     void setMasterHost(const std::string& host) { master_host = host; }
     void setMasterPort(int port) { master_port = port; }
     void setReplicationOffset(long long offset) { replication_offset = offset; }
+    void incrementReplicationOffset(long long bytes) { replication_offset += bytes; }
     
     void printInfo() const;
     std::string getInfo() const;
