@@ -86,4 +86,21 @@ std::optional<std::string> psync(
     }
 }
 
+std::optional<std::string> wait(
+    const std::vector<resp_value>& args,
+    RDStore& store,
+    Config& config
+) {
+        try {
+        cmd_utils::validateArgCount(args, 3, 3);
+        std::string response = cmd_utils::makeIntegerResponse(0);
+        return response;
+        
+        
+    } catch (const std::exception& e) {
+        return cmd_utils::makeErrorResponse(std::string("ERR ") + e.what());
+    }
+
+}
+
 }  // namespace commands::server_cmd

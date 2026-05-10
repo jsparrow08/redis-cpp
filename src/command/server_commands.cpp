@@ -31,7 +31,7 @@ std::optional<std::string> echo(
     RDStore& store,
     Config& config
 ) {
-    try {
+    try {        
         cmd_utils::validateArgCount(args, 2, 2);
         
         std::string message = cmd_utils::getStringArg(args, 1);

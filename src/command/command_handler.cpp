@@ -25,6 +25,7 @@ void CommandHandler::initializeRegistry() {
     // replicaiton command
     registry_["REPLCONF"] = {commands::replication_cmd::replconf, CommandType::REPLICATION};
     registry_["PSYNC"] = {commands::replication_cmd::psync, CommandType::REPLICATION};
+    registry_["WAIT"] = {commands::replication_cmd::wait, CommandType::REPLICATION};
 }
 
 // std::optional<std::string> CommandHandler::handleCommand(int bytes, char buffer[]) {

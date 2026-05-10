@@ -26,4 +26,10 @@ std::optional<std::string> psync(
 // Syntax: PSYNC replication-id offset
 // Response: "+FULLRESYNC replication-id offset" followed by RDB file
 
+std::optional<std::string> wait(
+    const std::vector<resp_value>& args,
+    RDStore& store,
+    Config& config
+);
+
 }  // namespace commands::server_cmd
