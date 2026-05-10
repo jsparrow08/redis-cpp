@@ -93,7 +93,9 @@ std::optional<std::string> wait(
 ) {
         try {
         cmd_utils::validateArgCount(args, 3, 3);
-        std::string response = cmd_utils::makeIntegerResponse(0);
+        if(config.isReplica()) return cmd_utils::makeErrorResponse("ERR WAIT only supported for master replica");
+        int replica_count = config.getReplicaCount();
+        std::string response = cmd_utils::makeIntegerResponse(replica_count);
         return response;
         
         

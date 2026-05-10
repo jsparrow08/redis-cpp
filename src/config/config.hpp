@@ -63,6 +63,29 @@ public:
         return 0;
     }
 
+    int getReplicaCount(){
+        if(std::holds_alternative<MasterConfig>(replication_config)){
+            auto& master_config = std::get<MasterConfig>(replication_config);
+            return master_config.getReplicaCount();
+        }
+        return 0;
+    }
+    
+    void incrementReplicaCount() {
+        if(std::holds_alternative<MasterConfig>(replication_config)){
+            auto& master_config = std::get<MasterConfig>(replication_config);
+            master_config.incrementReplicaCount();
+        }
+    }
+    void decrementReplicaCount() {
+        if(std::holds_alternative<MasterConfig>(replication_config)){
+            auto& master_config = std::get<MasterConfig>(replication_config);
+            master_config.decrementReplicaCount();
+        }
+    }
+
+
+
 private:
     int port = 6379;
     int version = 1;

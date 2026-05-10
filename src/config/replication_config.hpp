@@ -11,9 +11,12 @@ public:
     // Master-specific properties
     std::string getReplicationId() const { return replication_id; }
     long long getReplicationOffset() const { return replication_offset; }
-    
+    int getReplicaCount() const { return replica_count;}
     void setReplicationId(int id) { replication_id = id; }
     void setReplicationOffset(long long offset) { replication_offset = offset; }
+
+    void incrementReplicaCount() { replica_count++; }
+    void decrementReplicaCount() { replica_count--; }
     
     void printInfo() const;
     std::string getInfo() const;
@@ -22,6 +25,7 @@ public:
 private:
     std::string replication_id = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
     long long replication_offset = 0;
+    int replica_count=0;
 };
 
 // Slave Server Configuration

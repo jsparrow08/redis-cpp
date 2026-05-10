@@ -240,6 +240,7 @@ void RedisServer::process_readable_connection(int fd) {
                     // This is a replica connection - mark it for command propagation
                     conn.is_replica_connection = true;
                     conn.state = ConnectionState::COMMAND_STREAMING;
+                    config.incrementReplicaCount();
                     std::cout << "[MASTER] Replica connected on fd: " << fd << "\n";
                 }
             }
